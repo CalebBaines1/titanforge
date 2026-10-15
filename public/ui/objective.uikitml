@@ -1,7 +1,7 @@
 <style>
   .panel-root {
     flex-direction: column;
-    width: 360px;
+    width: 400px;
   }
 
   .panel-content {
@@ -68,6 +68,9 @@
         <RectangleGoggles></RectangleGoggles>
       </ButtonIcon>
       <ButtonLabel>Enter XR</ButtonLabel>
+    </Button>
+    <Button id="cockpit-button">
+      <ButtonLabel id="cockpit-label">Enter cockpit</ButtonLabel>
     </Button>
     <Button id="restart-button" variant="secondary">
       <ButtonLabel>Restart</ButtonLabel>

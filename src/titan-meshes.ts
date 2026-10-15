@@ -1,11 +1,15 @@
 import {
+  BackSide,
   BoxGeometry,
+  CircleGeometry,
   Color,
   ConeGeometry,
   CylinderGeometry,
   DodecahedronGeometry,
+  Float32BufferAttribute,
   Group,
   Mesh,
+  MeshBasicMaterial,
   MeshStandardMaterial,
   Object3D,
   OctahedronGeometry,
@@ -289,4 +293,70 @@ export function buildLeverKnob(side: 'left' | 'right'): Object3D {
   const knob = new Mesh(new SphereGeometry(0.014, 10, 8), side === 'left' ? Mats.knobLeft : Mats.knobRight);
   g.add(knob);
   return g;
+}
+
+/** Inside-out sky for cockpit mode: dusty horizon fading to a violet zenith. */
+export function buildSkyDome(): Mesh {
+  const geo = new SphereGeometry(80, 24, 12);
+  const pos = geo.getAttribute('position');
+  const colors: number[] = [];
+  const horizon = new Color(0xe39a6b);
+  const zenith = new Color(0x2b1d4a);
+  const ground = new Color(0x5a2e1d);
+  const c = new Color();
+  for (let i = 0; i < pos.count; i++) {
+    const t = pos.getY(i) / 80;
+    if (t >= 0) c.copy(horizon).lerp(zenith, Math.pow(t, 0.6));
+    else c.copy(horizon).lerp(ground, Math.min(1, -t * 4));
+    colors.push(c.r, c.g, c.b);
+  }
+  geo.setAttribute('color', new Float32BufferAttribute(colors, 3));
+  const sky = new Mesh(geo, new MeshBasicMaterial({ vertexColors: true, side: BackSide, fog: false }));
+  sky.name = 'SkyDome';
+  return sky;
+}
+
+/** Canyon floor far below the plateau, only shown in cockpit mode (diorama units). */
+export function buildCanyonFloor(): Object3D {
+  const g = new Group();
+  const floor = new Mesh(new CircleGeometry(3, 24), Mats.groundDark);
+  floor.rotation.x = -Math.PI / 2;
+  floor.position.y = -0.3;
+  g.add(floor);
+  // Distant mesas for a sense of scale.
+  const mesas: [number, number, number, number][] = [
+    [-1.4, -1.6, 0.35, 0.3], [1.2, -1.9, 0.5, 0.45], [2.0, -0.4, 0.3, 0.25],
+    [-2.1, 0.3, 0.4, 0.35], [0.3, -2.4, 0.6, 0.5], [-0.9, 1.8, 0.3, 0.2],
+  ];
+  mesas.forEach(([x, z, r, h], i) => {
+    const m = new Mesh(new CylinderGeometry(r * 0.8, r, h, 7), i % 2 ? Mats.rock : Mats.ground);
+    m.position.set(x, -0.3 + h / 2, z);
+    g.add(m);
+  });
+  return g;
+}
+
+/** Fixed cockpit frame around a seated player. Gives the eyes a stable reference while the world moves. */
+export function buildCockpitFrame(): Object3D {
+  const g = new Group();
+  const frameMat = Mats.console;
+  for (const x of [-0.85, 0.85]) {
+    const pillar = box(0.04, 0.9, 0.04, frameMat, x, 1.05, -0.5);
+    pillar.rotation.z = x < 0 ? -0.15 : 0.15;
+    g.add(pillar);
+  }
+  g.add(box(1.6, 0.04, 0.05, frameMat, 0, 1.52, -0.5));
+  g.add(box(1.2, 0.06, 0.3, frameMat, 0, 0.66, -0.3));
+  g.add(box(1.2, 0.01, 0.01, Mats.hazard, 0, 0.695, -0.15));
+  return g;
+}
+
+/** Head-locked black shell used to fade between table and cockpit views. */
+export function buildFadeShell(): Mesh {
+  const mat = new MeshBasicMaterial({ color: 0x000000, side: BackSide, transparent: true, opacity: 0, depthTest: false, depthWrite: false });
+  const shell = new Mesh(new SphereGeometry(0.25, 12, 8), mat);
+  shell.renderOrder = 999;
+  shell.frustumCulled = false;
+  shell.visible = false;
+  return shell;
 }

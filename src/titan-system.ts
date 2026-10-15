@@ -2,15 +2,18 @@ import {
   createSystem,
   Entity,
   Grabbed,
+  GrabSystem,
   Group,
   Mesh,
   Object3D,
   OneHandGrabbable,
+  Quaternion,
   UIKit,
   UIKitMLAsset,
   Vector3,
   VisibilityState,
 } from '@iwsdk/core';
+import { music } from './music.js';
 import {
   DriveLever,
   LeverSides,
@@ -21,13 +24,17 @@ import {
 import {
   buildArm,
   buildBridge,
+  buildCanyonFloor,
   buildChassis,
+  buildCockpitFrame,
   buildConsole,
+  buildFadeShell,
   buildGripper,
   buildLeverKnob,
   buildMotor,
   buildPowerCell,
   buildRelay,
+  buildSkyDome,
   buildSocketMarker,
   buildTerrain,
   buildTitanGate,
@@ -54,6 +61,14 @@ const DIORAMA_ORIGIN = new Vector3(0, 0.72, -0.5);
 const ROVER_RADIUS = 0.035;
 const ROVER_SPEED = 0.09; // m/s at full throttle
 const ROVER_TURN = 2.4; // rad/s at full differential
+const ROVER_TURN_COCKPIT = 0.9; // gentler turning when you ride inside
+/** How much the world grows when you climb into the cockpit (8 cm rover -> 2 m). */
+const COCKPIT_SCALE = 25;
+/** Rover-local point you sit at, and where it lands in the room (seated, chest height). */
+const SEAT_LOCAL = new Vector3(0, 0.042, 0.03);
+const SEAT_ANCHOR = new Vector3(0, 0.5, -0.05);
+const FADE_TIME = 0.35;
+const CONSOLE_POSITION = new Vector3(0, 0.72, -0.275);
 const SNAP_DISTANCE = 0.07;
 const PICKUP_DISTANCE = 0.04;
 const DELIVER_DISTANCE = 0.05;
@@ -112,7 +127,7 @@ const OBJECTIVES: Record<Stage, [string, string]> = {
 };
 
 const REACH_HINT =
-  'The cell is too deep for the gripper to reach from the mouth of the crevice. Could a longer reach help? Try rebuilding.';
+  'Your rover is too wide for the gap, and the cell is too deep to reach. Go back to the table, fit the ARM (the long yellow boom) and put the gripper on its tip.';
 
 interface PartInfo {
   entity: Entity;
@@ -142,9 +157,20 @@ export class TitanSystem extends createSystem({
   private markers = new Map<Entity, Mesh>();
   private stage = Stage.Build;
   private hintTimer = 0;
+  private hintPulse = 0;
   private showingHint = false;
   private titleText?: UIKit.Text;
   private bodyText?: UIKit.Text;
+  private cockpitLabel?: UIKit.Text;
+  private cockpit = false;
+  private fade: 'none' | 'out' | 'in' = 'none';
+  private fadeAlpha = 0;
+  private fadeShell!: Mesh;
+  private skyDome!: Mesh;
+  private canyonFloor!: Object3D;
+  private cockpitFrame!: Object3D;
+  private q1 = new Quaternion();
+  private yAxis = new Vector3(0, 1, 0);
 
   // Scratch values, allocated once.
   private v1 = new Vector3();
@@ -204,11 +230,24 @@ export class TitanSystem extends createSystem({
     this.cell = buildPowerCell();
     rootObj.add(this.cell);
 
+    // Cockpit-only scenery: the canyon below the plateau, a sky that hides
+    // the room, and a fixed frame around the seated player.
+    this.canyonFloor = add(buildCanyonFloor());
+    this.canyonFloor.visible = false;
+    this.skyDome = buildSkyDome();
+    this.skyDome.visible = false;
+    this.world.createTransformEntity(this.skyDome);
+    this.cockpitFrame = buildCockpitFrame();
+    this.cockpitFrame.visible = false;
+    this.world.createTransformEntity(this.cockpitFrame);
+    this.fadeShell = buildFadeShell();
+    this.world.camera.add(this.fadeShell);
+
     // Driver console with two drive levers, right at the front edge where
     // seated hands rest.
     const consoleObj = buildConsole();
-    consoleObj.position.set(0, 0, 0.225);
-    const consoleEntity = this.world.createTransformEntity(consoleObj, { parent: this.root });
+    consoleObj.position.copy(CONSOLE_POSITION);
+    const consoleEntity = this.world.createTransformEntity(consoleObj);
     for (const side of [LeverSides.Left, LeverSides.Right]) {
       const knob = buildLeverKnob(side);
       knob.name = side === LeverSides.Left ? 'LeverLeft' : 'LeverRight';
@@ -301,6 +340,7 @@ export class TitanSystem extends createSystem({
     this.bridgeDeck.rotation.x = Math.PI / 2;
     this.hintTimer = 0;
     this.showingHint = false;
+    this.setCockpit(false);
     this.setStage(Stage.Build);
   }
 
@@ -309,6 +349,13 @@ export class TitanSystem extends createSystem({
     if (panel == null) return;
     this.titleText = panel.getElementById<UIKit.Text>('objective-title') ?? undefined;
     this.bodyText = panel.getElementById<UIKit.Text>('objective-body') ?? undefined;
+    this.cockpitLabel = panel.getElementById<UIKit.Text>('cockpit-label') ?? undefined;
+    const cockpitButton = panel.getElementById('cockpit-button');
+    if (cockpitButton != null) {
+      const onCockpit = () => this.toggleCockpit();
+      cockpitButton.addEventListener('click', onCockpit);
+      this.cleanupFuncs.push(() => cockpitButton.removeEventListener('click', onCockpit));
+    }
     const restart = panel.getElementById('restart-button');
     if (restart != null) {
       const onRestart = () => this.resetWorldState();
@@ -334,10 +381,17 @@ export class TitanSystem extends createSystem({
   }
 
   private onPartGrabbed(part: Entity): void {
+    if (this.cockpit) {
+      // Parts are giant and all around you in the cockpit; don't let a stray
+      // pinch rip the arm off.
+      this.world.getSystem(GrabSystem)?.forceRelease(part);
+      return;
+    }
     this.detachPart(part);
   }
 
   private onPartReleased(part: Entity): void {
+    if (this.cockpit) return;
     const socket = this.findSnapSocket(part);
     for (const marker of this.markers.values()) marker.material = Mats.socketFree;
     if (socket == null) {
@@ -417,9 +471,13 @@ export class TitanSystem extends createSystem({
     const pulse = 1 + Math.sin(time * 4) * 0.15;
     for (const marker of this.markers.values()) marker.scale.setScalar(pulse);
 
+    // Desktop testing shortcut: C toggles the cockpit.
+    if (this.world.input.keyboard.getKeyDown('KeyC')) this.toggleCockpit();
     const [left, right] = this.readLevers(dt);
-    const drivable = this.hasOnRover(PartKinds.Wheels) && this.hasOnRover(PartKinds.Motor);
-    if (drivable) this.driveRover(left, right, dt);
+    const drivable = this.isDrivable();
+    if (drivable && this.fade === 'none') this.driveRover(left, right, dt);
+    this.updateFade(dt);
+    if (this.cockpit) this.placeWorldAroundSeat();
 
     this.updateCell(dt);
     this.updateBridge(dt);
@@ -455,7 +513,7 @@ export class TitanSystem extends createSystem({
 
   private driveRover(left: number, right: number, dt: number): void {
     const speed = ((left + right) / 2) * ROVER_SPEED;
-    const turn = ((right - left) / 2) * ROVER_TURN;
+    const turn = ((right - left) / 2) * (this.cockpit ? ROVER_TURN_COCKPIT : ROVER_TURN);
     if (speed === 0 && turn === 0) return;
     const obj = this.rover.object3D!;
     this.roverYaw += turn * dt;
@@ -563,12 +621,83 @@ export class TitanSystem extends createSystem({
       const p = this.rover.object3D!.position;
       const near = Math.hypot(p.x - CREVICE_MOUTH.x, p.z - CREVICE_MOUTH.z) < 0.07;
       this.hintTimer = near && !this.hasOnRover(PartKinds.Arm) ? this.hintTimer + dt : 0;
-      const show = this.hintTimer > 2;
+      const show = this.hintTimer > 1;
+      // Make the arm on the tray glow while the hint is up.
+      Mats.arm.emissive.setHex(show ? 0x806000 : 0x000000);
+      Mats.arm.emissiveIntensity = show ? 0.6 + Math.sin(this.hintPulse += dt * 6) * 0.4 : 1;
       if (show !== this.showingHint) {
         this.showingHint = show;
         this.bodyText?.setProperties({ text: show ? REACH_HINT : OBJECTIVES[Stage.Retrieve][1] });
       }
     }
+  }
+
+  // ---------------------------------------------------------------- cockpit
+
+  private isDrivable(): boolean {
+    return this.hasOnRover(PartKinds.Wheels) && this.hasOnRover(PartKinds.Motor);
+  }
+
+  private toggleCockpit(): void {
+    if (this.fade !== 'none') return;
+    if (!this.cockpit && !this.isDrivable()) {
+      this.bodyText?.setProperties({ text: 'Your rover needs wheels and a motor before you can ride in it.' });
+      return;
+    }
+    this.fade = 'out';
+    this.fadeShell.visible = true;
+  }
+
+  private updateFade(dt: number): void {
+    if (this.fade === 'none') return;
+    const mat = this.fadeShell.material as { opacity: number };
+    if (this.fade === 'out') {
+      this.fadeAlpha = Math.min(1, this.fadeAlpha + dt / FADE_TIME);
+      if (this.fadeAlpha >= 1) {
+        this.setCockpit(!this.cockpit);
+        this.fade = 'in';
+      }
+    } else {
+      this.fadeAlpha = Math.max(0, this.fadeAlpha - dt / FADE_TIME);
+      if (this.fadeAlpha <= 0) {
+        this.fade = 'none';
+        this.fadeShell.visible = false;
+      }
+    }
+    mat.opacity = this.fadeAlpha;
+  }
+
+  private setCockpit(on: boolean): void {
+    this.cockpit = on;
+    this.skyDome.visible = on;
+    this.canyonFloor.visible = on;
+    this.cockpitFrame.visible = on;
+    for (const marker of this.markers.values()) marker.parent!.visible = !on;
+    this.cockpitLabel?.setProperties({ text: on ? 'Back to table' : 'Enter cockpit' });
+    music.setIntensity(on ? 1 : 0);
+    if (on) {
+      this.placeWorldAroundSeat();
+    } else {
+      this.rootObj.position.copy(DIORAMA_ORIGIN);
+      this.rootObj.quaternion.identity();
+      this.rootObj.scale.setScalar(1);
+    }
+  }
+
+  /**
+   * Grow the diorama and move it so the rover's seat sits where the player
+   * sits. The player never moves; the world turns and slides around them,
+   * which keeps seated play comfortable.
+   */
+  private placeWorldAroundSeat(): void {
+    const rover = this.rover.object3D!;
+    // Seat position in diorama space.
+    this.v1.copy(SEAT_LOCAL).applyAxisAngle(this.yAxis, this.roverYaw).add(rover.position);
+    this.q1.setFromAxisAngle(this.yAxis, -this.roverYaw);
+    this.v1.multiplyScalar(COCKPIT_SCALE).applyQuaternion(this.q1);
+    this.rootObj.scale.setScalar(COCKPIT_SCALE);
+    this.rootObj.quaternion.copy(this.q1);
+    this.rootObj.position.copy(SEAT_ANCHOR).sub(this.v1);
   }
 
   private setStage(stage: Stage): void {
