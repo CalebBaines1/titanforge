@@ -1,0 +1,76 @@
+<style>
+  .panel-root {
+    flex-direction: column;
+    width: 360px;
+  }
+
+  .panel-content {
+    flex-direction: column;
+    padding-top: 16px;
+    padding-left: 24px;
+    padding-right: 24px;
+    padding-bottom: 8px;
+  }
+
+  .brand {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    color: #c9774a;
+  }
+
+  .title {
+    margin-top: 6px;
+    font-size: 22px;
+    font-weight: 700;
+    line-height: 1.1;
+    color: #272727;
+  }
+
+  .title:dark {
+    color: rgba(255, 255, 255, 0.95);
+  }
+
+  .body {
+    margin-top: 10px;
+    font-size: 15px;
+    font-weight: 500;
+    line-height: 1.35;
+    width: 100%;
+    color: #333333;
+  }
+
+  .body:dark {
+    color: rgba(255, 255, 255, 0.85);
+  }
+
+  .actions {
+    flex-direction: row;
+    gap: 12px;
+    padding-left: 24px;
+    padding-right: 24px;
+    padding-top: 12px;
+    padding-bottom: 20px;
+  }
+</style>
+<Panel class="panel-root">
+  <div class="panel-content">
+    <div class="brand">TITANFORGE - EXPEDITION 1</div>
+    <div id="objective-title" class="title">BUILD YOUR ROVER</div>
+    <Divider></Divider>
+    <div id="objective-body" class="body">
+      Pinch a part from the tray and drop it on a glowing ring on the chassis.
+    </div>
+  </div>
+  <div class="actions">
+    <Button id="xr-button">
+      <ButtonIcon>
+        <RectangleGoggles></RectangleGoggles>
+      </ButtonIcon>
+      <ButtonLabel>Enter XR</ButtonLabel>
+    </Button>
+    <Button id="restart-button" variant="secondary">
+      <ButtonLabel>Restart</ButtonLabel>
+    </Button>
+  </div>
+</Panel>
