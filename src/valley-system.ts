@@ -5,6 +5,7 @@ import {
   Mesh,
   MeshBasicMaterial,
   Object3D,
+  PokeInteractable,
   RayInteractable,
   Sprite,
   SpriteMaterial,
@@ -22,6 +23,7 @@ import {
   buildBattleRing,
   buildBolt,
   buildCamp,
+  buildCard,
   buildHero,
   buildHouse,
   buildScatter,
@@ -44,7 +46,13 @@ type Element = (typeof Elements)[keyof typeof Elements];
 
 /** Where the valley sits in the room: a seated player's tabletop, in front of them. */
 const VALLEY_ORIGIN = new Vector3(0, 0.72, -0.5);
-const HERO_SPEED = 0.07; // m/s on the table
+const HERO_SPEED = 0.09; // m/s on the table
+/** Air joystick: hand travel ignored before the hero moves, and travel for full speed (metres). */
+const JOY_DEADZONE = 0.015;
+const JOY_FULL = 0.05;
+/** Where the valley goes in XR: this far in front of your head, and this far below it. */
+const PLACE_REACH = 0.5;
+const PLACE_BELOW_HEAD = 0.5;
 const FOE_SPEED = 0.05;
 const SIGHT_RANGE = 0.11;
 const SIGHT_HALF_ANGLE = 0.5;
@@ -82,7 +90,7 @@ const FUSIONS: Record<string, Fusion> = {
 const fusionKey = (a: Element, b: Element) => (a < b ? `${a}+${b}` : `${b}+${a}`);
 
 const QUESTS: [string, string][] = [
-  ['CLEAR THE ROAD', 'Two air bandits patrol past the bridge. Point and pinch (or click) the ground to walk. Get spotted, or sneak up and strike first.'],
+  ['CLEAR THE ROAD', 'Two air bandits patrol past the bridge. To walk, pinch anywhere and move your hand (or use a thumbstick; WASD or hold-click on desktop). Tap a card to cast.'],
   ['CLEAR THE BANDIT CAMP', 'The camp at the far end of the road has two air bandits and an earth brute. Fire beats air; air beats earth. Try Fuse: earth + fire makes Lava.'],
   ['GO HOME', 'The valley road is safe. Walk back to your house by the lantern post.'],
   ['THE VALLEY IS SAFE', 'For now. More of Lantern Valley is coming: mounts, fishing, the world boss and the realm gates.'],
@@ -113,6 +121,19 @@ interface Bolt {
   element: Element;
   ambush: boolean;
 }
+type CardKind = Element | 'fuse';
+interface Card {
+  kind: CardKind;
+  root: Group;
+  face: Mesh;
+  glow: Mesh;
+  baseX: number;
+  baseY: number;
+  baseRot: number;
+  hover: boolean;
+  lift: number;
+  pulse: number;
+}
 interface Floater {
   sprite: Sprite;
   t: number;
@@ -136,6 +157,21 @@ export class ValleySystem extends createSystem({
   private walking = false;
   private marker!: Mesh;
   private markerT = 0;
+  private cursor!: Mesh;
+  private cursorT = 0;
+  private steering = false;
+  private steerStart = 0;
+  private steerX = 0;
+  private steerZ = 0;
+  /** Movement input this frame in valley space, length 0..1 (thumbstick, WASD or the air joystick). */
+  private stick = new Vector3();
+  private camRight = new Vector3();
+  private joyHand: XRHandedness | null = null;
+  private joyStart = new Vector3();
+  private joySession: XRSession | null = null;
+  /** Seconds until the valley is placed in front of the player (after entering XR, or on Recenter). */
+  private placeIn = -1;
+  private camFwd = new Vector3();
   private views = new Map<Entity, FoeView>();
   private ring!: ReturnType<typeof buildBattleRing>;
   private ringCenter = new Vector3();
@@ -148,6 +184,7 @@ export class ValleySystem extends createSystem({
   private flame!: Mesh;
   private bolts: Bolt[] = [];
   private floaters: Floater[] = [];
+  private cards: Card[] = [];
   private floaterIndex = 0;
   private cooldown = 0;
   private hurtT = 0;
@@ -176,15 +213,16 @@ export class ValleySystem extends createSystem({
     this.say('Bandits patrol past the bridge. Stay out of their sight cones, or fight.');
     if (!this.world.xrEnabled || this.world.visibilityState.peek() === VisibilityState.NonImmersive) {
       // On a flat screen, look down at the table the way a seated player would.
-      this.world.camera.rotation.set(-0.62, 0, 0);
+      this.world.camera.rotation.set(-0.8, 0, 0);
     }
     // A small test hook for the desktop and the CLI: walk, cast, fuse.
     (window as unknown as { valley: unknown }).valley = {
       walkTo: (x: number, z: number) => this.walkTo(x, z),
       cast: (e: Element) => this.onCard(e),
       fuse: () => this.toggleFuse(),
+      cards: () => this.cards.map((c) => { const v = new Vector3(); c.face.getWorldPosition(v); return [c.face.parent?.name, c.face.parent?.parent?.name, v.toArray().map((n) => +n.toFixed(3)), c.face.visible, c.root.visible]; }),
       setTimeScale: (n: number) => { this.timeScale = Math.max(1, Math.min(40, Math.round(n))); },
-      state: () => ({ hero: this.heroPos.toArray(), hp: this.hero.getValue(Hero, 'hp'), quest: this.quest, fight: this.fightGroup, alert: this.alertGroup, status: this.status }),
+      state: () => ({ vis: this.world.visibilityState.peek(), placeIn: this.placeIn, root: this.rootObj.position.toArray().map((n) => +n.toFixed(3)), hero: this.heroPos.toArray(), stick: this.stick.toArray(), walking: this.walking, hp: this.hero.getValue(Hero, 'hp'), quest: this.quest, fight: this.fightGroup, alert: this.alertGroup, status: this.status }),
     };
   }
 
@@ -203,13 +241,40 @@ export class ValleySystem extends createSystem({
     this.world.createTransformEntity(land, { parent: root });
     const groundEntity = this.world.createTransformEntity(ground, { parent: root });
     groundEntity.addComponent(RayInteractable);
-    const onGround = (e: { point: Vector3 }) => {
-      this.v1.copy(e.point); this.rootObj.worldToLocal(this.v1);
-      this.walkTo(this.v1.x, this.v1.z);
+    // Hold and steer: pinch (or press) on the ground and keep holding; the hero follows the point.
+    // A quick tap still sends the hero to that spot. The cursor dot shows where you are pointing.
+    type GroundEvent = { point: Vector3 };
+    const toLocal = (e: GroundEvent) => { this.v1.copy(e.point); this.rootObj.worldToLocal(this.v1); return this.v1; };
+    const immersive = () => this.world.visibilityState.peek() !== VisibilityState.NonImmersive;
+    const onDown = (e: GroundEvent) => {
+      if (immersive()) return;
+      const p = toLocal(e);
+      this.steering = true; this.steerStart = this.time;
+      this.steerX = p.x; this.steerZ = p.z;
+      this.walkTo(p.x, p.z);
     };
-    const target = ground as unknown as { addEventListener(t: string, f: (e: { point: Vector3 }) => void): void; removeEventListener(t: string, f: (e: { point: Vector3 }) => void): void };
-    target.addEventListener('pointerdown', onGround);
-    this.cleanupFuncs.push(() => target.removeEventListener('pointerdown', onGround));
+    const onMove = (e: GroundEvent) => {
+      if (immersive()) return;
+      const p = toLocal(e);
+      this.cursor.position.set(p.x, heightAt(p.x, p.z) + 0.002, p.z);
+      this.cursorT = 1;
+      if (this.steering && Math.hypot(p.x - this.steerX, p.z - this.steerZ) > 0.006) {
+        this.steerX = p.x; this.steerZ = p.z;
+        this.walkTo(p.x, p.z, true);
+      }
+    };
+    const onUp = () => {
+      if (!this.steering) return;
+      this.steering = false;
+      // a long hold means "follow my finger": letting go stops the hero
+      if (this.time - this.steerStart > 0.35) this.walking = false;
+    };
+    const target = ground as unknown as { addEventListener(t: string, f: (e: GroundEvent) => void): void; removeEventListener(t: string, f: (e: GroundEvent) => void): void };
+    const listeners: [string, (e: GroundEvent) => void][] = [['pointerdown', onDown], ['pointermove', onMove], ['pointerup', onUp], ['pointercancel', onUp]];
+    for (const [type, fn] of listeners) target.addEventListener(type, fn);
+    this.cleanupFuncs.push(() => { for (const [type, fn] of listeners) target.removeEventListener(type, fn); });
+    window.addEventListener('pointerup', onUp);
+    this.cleanupFuncs.push(() => window.removeEventListener('pointerup', onUp));
 
     this.world.createTransformEntity(buildScatter(), { parent: root });
     const house = buildHouse();
@@ -222,6 +287,8 @@ export class ValleySystem extends createSystem({
     this.world.createTransformEntity(camp.root, { parent: root });
 
     this.marker = buildTargetMarker(); this.marker.visible = false; rootObj.add(this.marker);
+    this.cursor = buildTargetMarker(); this.cursor.visible = false; this.cursor.scale.setScalar(0.6);
+    (this.cursor.material as MeshBasicMaterial).color.setHex(0xffffff); rootObj.add(this.cursor);
     this.ring = buildBattleRing(); this.ring.root.visible = false; rootObj.add(this.ring.root);
 
     // the hero
@@ -239,6 +306,8 @@ export class ValleySystem extends createSystem({
     this.spawnFoe(1, 'air', CAMP.x + 0.05, CAMP.z + 0.025, 0, -2.6, 45, 8, 2.3, 45, false);
     this.spawnFoe(1, 'earth', CAMP.x + 0.0, CAMP.z - 0.045, 0, 0.3, 90, 14, 3.0, 80, true);
 
+    this.buildCards();
+
     for (let i = 0; i < 6; i++) {
       const b = buildBolt(); rootObj.add(b.root);
       this.bolts.push({ root: b.root, glow: b.glow, active: false, t: 0, from: new Vector3(), to: new Vector3(), target: null, aoe: false, damage: 0, element: 'fire', ambush: false });
@@ -246,6 +315,61 @@ export class ValleySystem extends createSystem({
     for (let i = 0; i < 10; i++) {
       const s = textSprite(); rootObj.add(s);
       this.floaters.push({ sprite: s, t: 1, pos: new Vector3() });
+    }
+  }
+
+  /** Five cards fanned along the near edge of the table: four elements with Fuse in the middle. */
+  private buildCards(): void {
+    // the fan sits along the near edge of the table, facing you
+    const hz = VALLEY_D / 2 + 0.03;
+    const defs: [CardKind, string, string, string][] = [
+      ['fire', 'FIRE', '#e8602a', `${CAST_COST} energy`],
+      ['water', 'WATER', '#2f8fd8', `${CAST_COST} energy`],
+      ['fuse', 'FUSE', '#8a5ad0', 'pick two'],
+      ['earth', 'EARTH', '#b07a3a', `${CAST_COST} energy`],
+      ['air', 'AIR', '#7ab8c8', `${CAST_COST} energy`],
+    ];
+    defs.forEach(([kind, label, color, cost], i) => {
+      const k = i - 2;
+      const c = buildCard(kind, label, color, cost);
+      const card: Card = { kind, root: c.root, face: c.face, glow: c.glow, baseX: k * 0.046, baseY: -Math.abs(k) * 0.004, baseRot: -k * 0.08, hover: false, lift: 0, pulse: 0 };
+      card.baseY += 0.004;
+      c.root.position.set(card.baseX, card.baseY, hz + Math.abs(k) * 0.004);
+      c.root.rotation.set(-0.45, 0, card.baseRot, 'YXZ');
+      // the card pivot is the entity; pointer events from its face bubble up to it
+      const entity = this.world.createTransformEntity(c.root, { parent: this.rootEntity });
+      entity.addComponent(RayInteractable);
+      entity.addComponent(PokeInteractable);
+      type Ev = { stopPropagation?: () => void };
+      const face = c.root as unknown as { addEventListener(t: string, f: (e: Ev) => void): void; removeEventListener(t: string, f: (e: Ev) => void): void };
+      const down = (e: Ev) => {
+        e.stopPropagation?.();
+        card.pulse = 1;
+        if (kind === 'fuse') this.toggleFuse(); else this.onCard(kind);
+      };
+      const enter = () => { card.hover = true; };
+      const leave = () => { card.hover = false; };
+      const pairs: [string, (e: Ev) => void][] = [['pointerdown', down], ['pointerenter', enter], ['pointerleave', leave]];
+      for (const [t, f] of pairs) face.addEventListener(t, f);
+      this.cleanupFuncs.push(() => { for (const [t, f] of pairs) face.removeEventListener(t, f); });
+      this.cards.push(card);
+    });
+  }
+
+  private updateCards(dt: number): void {
+    const energy = this.hero.getValue(Hero, 'energy') ?? 0;
+    for (const c of this.cards) {
+      const picked = this.fuseArmed && (c.kind === 'fuse' || c.kind === this.fuseFirst);
+      const want = c.hover ? 0.012 : picked ? 0.009 : 0;
+      c.lift += (want - c.lift) * Math.min(1, dt * 12);
+      c.pulse = Math.max(0, c.pulse - dt * 4);
+      c.root.position.y = c.baseY + c.lift + 0.004 * Math.sin(Math.PI * c.pulse);
+      const s = 1 + 0.12 * c.pulse;
+      c.root.scale.set(s, s, s);
+      const cost = c.kind === 'fuse' ? FUSION_COST : this.fuseArmed ? 0 : CAST_COST;
+      const ready = energy >= cost && this.cooldown <= 0;
+      (c.face.material as MeshBasicMaterial).opacity = ready ? 1 : 0.5;
+      (c.glow.material as MeshBasicMaterial).opacity = picked ? 0.9 : c.hover ? 0.45 : 0;
     }
   }
 
@@ -283,6 +407,11 @@ export class ValleySystem extends createSystem({
     bind('card-air', () => this.onCard('air'));
     bind('fuse-button', () => this.toggleFuse());
     bind('restart-button', () => this.restart());
+    bind('recenter-button', () => { this.placeIn = 0; });
+    this.cleanupFuncs.push(this.world.visibilityState.subscribe((state) => {
+      if (state === VisibilityState.Visible) this.placeIn = 0.6; // wait for a settled head pose
+      else if (state === VisibilityState.NonImmersive) { this.rootObj.position.copy(VALLEY_ORIGIN); this.rootObj.rotation.set(0, 0, 0); }
+    }));
 
     const onFirstGesture = () => music.start();
     window.addEventListener('pointerdown', onFirstGesture, { once: true });
@@ -299,15 +428,17 @@ export class ValleySystem extends createSystem({
       xrButton.setProperties({ display: 'none' });
       return;
     }
-    const launchXR = () => {
+    const xrLabel = panel.getElementById<UIKit.Text>('xr-label');
+    const toggleXR = () => {
       music.start();
-      this.world.launchXR();
+      if (this.world.visibilityState.peek() === VisibilityState.NonImmersive) this.world.launchXR();
+      else this.world.exitXR();
     };
-    xrButton.addEventListener('click', launchXR);
+    xrButton.addEventListener('click', toggleXR);
     this.cleanupFuncs.push(
-      () => xrButton.removeEventListener('click', launchXR),
+      () => xrButton.removeEventListener('click', toggleXR),
       this.world.visibilityState.subscribe((state) => {
-        xrButton.setProperties({ display: state === VisibilityState.NonImmersive ? 'flex' : 'none' });
+        xrLabel?.setProperties({ text: state === VisibilityState.NonImmersive ? 'Enter XR' : 'Exit XR' });
       }),
     );
   }
@@ -315,7 +446,7 @@ export class ValleySystem extends createSystem({
   // ---------------------------------------------------------------- input
 
   /** Send the hero to a valley-local point, crossing the river by the bridge. */
-  walkTo(x: number, z: number): void {
+  walkTo(x: number, z: number, steer = false): void {
     const hx = VALLEY_W / 2 - 0.02, hz = VALLEY_D / 2 - 0.02;
     x = Math.max(-hx, Math.min(hx, x)); z = Math.max(-hz, Math.min(hz, z));
     const rxT = riverX(z);
@@ -331,6 +462,7 @@ export class ValleySystem extends createSystem({
     this.path[this.pathLen++].set(x, 0, z);
     this.pathIndex = 0;
     this.walking = true;
+    if (steer) return;
     this.marker.position.set(x, heightAt(x, z) + 0.002, z);
     this.markerT = 1;
   }
@@ -552,8 +684,90 @@ export class ValleySystem extends createSystem({
     if (kb.getKeyDown('Digit3')) this.onCard('earth');
     if (kb.getKeyDown('Digit4')) this.onCard('air');
     if (kb.getKeyDown('KeyF')) this.toggleFuse();
+    if (this.placeIn >= 0) { this.placeIn -= delta; if (this.placeIn < 0) this.placeValley(); }
+    this.readMoveInput();
     for (let i = 0; i < this.timeScale; i++) this.tick(dt);
   }
+
+  /**
+   * Gather this frame's steering into this.stick, relative to where you are looking:
+   * - Air joystick (XR): pinch anywhere (or pull a trigger) and move that hand. The hero walks the way
+   *   the hand moved, faster the further it moved; letting go stops it. No aiming needed.
+   * - Thumbsticks on either controller, and WASD / arrow keys on desktop.
+   */
+  private readMoveInput(): void {
+    const session = this.world.renderer.xr.getSession();
+    if (session !== this.joySession) {
+      this.joySession?.removeEventListener('selectstart', this.onSelectStart);
+      this.joySession?.removeEventListener('selectend', this.onSelectEnd);
+      this.joySession = session;
+      this.joyHand = null;
+      session?.addEventListener('selectstart', this.onSelectStart);
+      session?.addEventListener('selectend', this.onSelectEnd);
+    }
+    this.world.camera.getWorldDirection(this.camFwd);
+    this.camFwd.y = 0;
+    if (this.camFwd.lengthSq() < 1e-6) this.camFwd.set(0, 0, -1);
+    this.camFwd.normalize();
+    this.camRight.set(-this.camFwd.z, 0, this.camFwd.x);
+    let sx = 0, sy = 0;
+    const kb = this.world.input.keyboard;
+    if (kb.getKeyPressed('KeyW') || kb.getKeyPressed('ArrowUp')) sy -= 1;
+    if (kb.getKeyPressed('KeyS') || kb.getKeyPressed('ArrowDown')) sy += 1;
+    if (kb.getKeyPressed('KeyA') || kb.getKeyPressed('ArrowLeft')) sx -= 1;
+    if (kb.getKeyPressed('KeyD') || kb.getKeyPressed('ArrowRight')) sx += 1;
+    for (const pad of [this.world.input.gamepads.left, this.world.input.gamepads.right]) {
+      const a = pad?.getAxesValues('xr-standard-thumbstick');
+      if (a && Math.hypot(a.x, a.y) > 0.2) { sx += a.x; sy += a.y; }
+    }
+    this.stick.copy(this.camRight).multiplyScalar(sx).addScaledVector(this.camFwd, -sy);
+    if (this.joyHand) {
+      // hand offset since the pinch began, in world space (the valley is not rotated)
+      this.world.player.gripSpaces[this.joyHand as 'left' | 'right'].getWorldPosition(this.v2);
+      const dx = this.v2.x - this.joyStart.x, dz = this.v2.z - this.joyStart.z, d = Math.hypot(dx, dz);
+      const k = Math.min(1, Math.max(0, (d - JOY_DEADZONE) / JOY_FULL));
+      if (k > 0) this.stick.set(this.stick.x + dx / d * k, 0, this.stick.z + dz / d * k);
+    }
+    if (this.stick.lengthSq() > 1) this.stick.normalize();
+    // world -> valley space (the valley turns to face you when it is placed)
+    const a = this.rootObj.rotation.y, c = Math.cos(a), sn = Math.sin(a);
+    const wx = this.stick.x, wz = this.stick.z;
+    this.stick.set(wx * c - wz * sn, 0, wx * sn + wz * c);
+  }
+
+  /**
+   * Put the valley a comfortable reach in front of the player, a little below the head,
+   * turned to face them, with the HUD panel off its right-hand corner.
+   */
+  private placeValley(): void {
+    this.world.camera.getWorldPosition(this.v1);
+    this.world.camera.getWorldDirection(this.camFwd);
+    this.camFwd.y = 0;
+    if (this.camFwd.lengthSq() < 1e-6) this.camFwd.set(0, 0, -1);
+    this.camFwd.normalize();
+    const yaw = Math.atan2(-this.camFwd.x, -this.camFwd.z);
+    const y = Math.max(0.3, this.v1.y - PLACE_BELOW_HEAD);
+    this.rootObj.position.set(this.v1.x + this.camFwd.x * PLACE_REACH, y, this.v1.z + this.camFwd.z * PLACE_REACH);
+    this.rootObj.rotation.set(0, yaw, 0);
+    const panel = this.world.getSceneEntity('hud-panel')?.object3D;
+    if (panel) {
+      this.v2.set(VALLEY_W / 2 + 0.12, 0.22, 0.02);
+      this.rootObj.localToWorld(this.v2);
+      panel.position.copy(this.v2);
+      panel.rotation.set(-0.2, yaw - 0.6, 0, 'YXZ');
+    }
+  }
+
+  private onSelectStart = (e: XRInputSourceEvent): void => {
+    const hand = e.inputSource.handedness;
+    if (hand !== 'left' && hand !== 'right') return;
+    this.joyHand = hand;
+    this.world.player.gripSpaces[hand].getWorldPosition(this.joyStart);
+  };
+
+  private onSelectEnd = (e: XRInputSourceEvent): void => {
+    if (e.inputSource.handedness === this.joyHand) this.joyHand = null;
+  };
 
   private tick(dt: number): void {
     this.time += dt;
@@ -567,6 +781,7 @@ export class ValleySystem extends createSystem({
     this.updateFoes(dt, t);
     this.updateFight(dt);
     this.updateBolts(dt);
+    this.updateCards(dt);
 
     // floaters drift up and fade
     for (const f of this.floaters) {
@@ -583,6 +798,10 @@ export class ValleySystem extends createSystem({
     this.marker.visible = this.markerT > 0.01;
     (this.marker.material as MeshBasicMaterial).opacity = this.markerT;
     this.marker.scale.setScalar(1 + 0.3 * (1 - this.markerT));
+    // pointing cursor (desktop hover, or the air joystick's heading in XR)
+    this.cursorT = Math.max(0, this.cursorT - dt * 2);
+    this.cursor.visible = this.cursorT > 0.01;
+    (this.cursor.material as MeshBasicMaterial).opacity = 0.8 * Math.min(1, this.cursorT * 2);
     // camp fire flicker
     this.flame.scale.set(1, 0.85 + 0.25 * Math.sin(t * 13) * Math.sin(t * 7.3), 1);
 
@@ -605,6 +824,23 @@ export class ValleySystem extends createSystem({
 
   private updateHero(dt: number, t: number): void {
     let moving = false;
+    const push = Math.hypot(this.stick.x, this.stick.z);
+    if (push > 0.05) {
+      this.walking = false;
+      const step = HERO_SPEED * push * dt;
+      const nx = this.heroPos.x + this.stick.x / push * step, nz = this.heroPos.z + this.stick.z / push * step;
+      const hx = VALLEY_W / 2 - 0.02, hz = VALLEY_D / 2 - 0.02;
+      const onBridgeBand = Math.abs(nz - BRIDGE.z) < 0.016;
+      const inRiver = Math.abs(nx - riverX(nz)) < 0.026 && !onBridgeBand;
+      if (!inRiver && Math.abs(nx) < hx && Math.abs(nz) < hz) { this.heroPos.x = nx; this.heroPos.z = nz; }
+      else if (!(Math.abs(this.heroPos.x - riverX(nz)) < 0.026 && !onBridgeBand) && Math.abs(nz) < hz) this.heroPos.z = nz; // slide along the bank
+      this.heroDir = Math.atan2(this.stick.x, this.stick.z);
+      moving = true;
+      // a dot just ahead of the hero shows the heading
+      const ax = this.heroPos.x + this.stick.x / push * 0.03, az = this.heroPos.z + this.stick.z / push * 0.03;
+      this.cursor.position.set(ax, heightAt(ax, az) + 0.003, az);
+      this.cursorT = 1;
+    }
     if (this.walking && this.pathIndex < this.pathLen) {
       const tgt = this.path[this.pathIndex];
       const dx = tgt.x - this.heroPos.x, dz = tgt.z - this.heroPos.z, d = Math.hypot(dx, dz);
