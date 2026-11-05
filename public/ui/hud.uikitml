@@ -83,35 +83,21 @@
     <div class="brand">DUNGEON TABLE - LANTERN VALLEY</div>
     <div id="quest-title" class="title">CLEAR THE ROAD</div>
     <div id="quest-body" class="body">
-      Point at the ground and pinch (or click) to walk.
+      Pinch anywhere and move your hand to walk.
     </div>
     <Divider></Divider>
     <div id="stats-text" class="stats">Lv 1  HP 100/100  Energy 100  XP 0/100  Gold 0</div>
     <div id="status-text" class="status">Bandits patrol past the bridge. Stay out of their sight cones, or fight.</div>
   </div>
-  <div class="row">
-    <Button id="card-fire">
-      <ButtonLabel>Fire</ButtonLabel>
-    </Button>
-    <Button id="card-water">
-      <ButtonLabel>Water</ButtonLabel>
-    </Button>
-    <Button id="card-earth">
-      <ButtonLabel>Earth</ButtonLabel>
-    </Button>
-    <Button id="card-air">
-      <ButtonLabel>Air</ButtonLabel>
-    </Button>
-  </div>
   <div class="row last-row">
-    <Button id="fuse-button" variant="secondary">
-      <ButtonLabel id="fuse-label">Fuse</ButtonLabel>
-    </Button>
     <Button id="xr-button">
       <ButtonIcon>
         <RectangleGoggles></RectangleGoggles>
       </ButtonIcon>
-      <ButtonLabel>Enter XR</ButtonLabel>
+      <ButtonLabel id="xr-label">Enter XR</ButtonLabel>
+    </Button>
+    <Button id="recenter-button" variant="secondary">
+      <ButtonLabel>Recenter</ButtonLabel>
     </Button>
     <Button id="restart-button" variant="secondary">
       <ButtonLabel>Restart</ButtonLabel>

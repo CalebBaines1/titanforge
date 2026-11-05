@@ -400,3 +400,36 @@ export function buildBolt(): { root: Object3D; glow: Sprite; core: Sprite } {
 }
 
 export const ELEMENT_COLORS: Record<string, number> = { fire: 0xff7a30, water: 0x4ab8ff, earth: 0xd8a050, air: 0xdff6ff };
+
+/** Card art: element name, a simple glyph and the energy cost, on the element's colour. */
+const CARD_GLYPHS: Record<string, (g: CanvasRenderingContext2D) => void> = {
+  fire: (g) => { g.beginPath(); g.moveTo(80, 70); g.bezierCurveTo(130, 120, 120, 170, 80, 180); g.bezierCurveTo(40, 170, 30, 125, 62, 100); g.bezierCurveTo(66, 125, 78, 128, 80, 70); g.fill(); },
+  water: (g) => { g.beginPath(); g.moveTo(80, 70); g.bezierCurveTo(115, 120, 120, 145, 110, 160); g.arc(80, 150, 32, 0.3, Math.PI - 0.3); g.bezierCurveTo(40, 145, 45, 120, 80, 70); g.fill(); },
+  earth: (g) => { g.beginPath(); g.moveTo(30, 175); g.lineTo(70, 90); g.lineTo(90, 125); g.lineTo(105, 105); g.lineTo(135, 175); g.closePath(); g.fill(); },
+  air: (g) => { g.lineWidth = 9; g.lineCap = 'round'; for (const [y, w] of [[100, 70], [128, 90], [156, 60]] as const) { g.beginPath(); g.moveTo(40, y); g.lineTo(40 + w, y); g.arc(40 + w, y - 12, 12, Math.PI / 2, -Math.PI / 2, true); g.stroke(); } },
+  fuse: (g) => { g.lineWidth = 9; g.beginPath(); g.arc(64, 125, 30, 0, Math.PI * 2); g.stroke(); g.beginPath(); g.arc(96, 125, 30, 0, Math.PI * 2); g.stroke(); },
+};
+export function cardTex(kind: string, label: string, color: string, cost: string): CanvasTexture {
+  return canvasTex(160, 240, (g) => {
+    const r = 16;
+    g.fillStyle = '#1c1a22'; g.beginPath(); g.roundRect(0, 0, 160, 240, r); g.fill();
+    g.fillStyle = color; g.beginPath(); g.roundRect(8, 8, 144, 224, r - 4); g.fill();
+    g.fillStyle = 'rgba(0,0,0,0.22)'; g.beginPath(); g.roundRect(16, 52, 128, 148, 10); g.fill();
+    g.fillStyle = '#fff'; g.strokeStyle = '#fff';
+    g.font = 'bold 26px system-ui, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText(label, 80, 30);
+    CARD_GLYPHS[kind]?.(g);
+    g.font = 'bold 20px system-ui, sans-serif'; g.fillText(cost, 80, 216);
+  });
+}
+/** A playing card you tap or pinch. Pivot at its bottom edge so it can lift and tilt. */
+export function buildCard(kind: string, label: string, color: string, cost: string): { root: Group; face: Mesh; glow: Mesh } {
+  const root = new Group();
+  const geo = new PlaneGeometry(0.04, 0.06); geo.translate(0, 0.03, 0);
+  const face = new Mesh(geo, new MeshBasicMaterial({ map: cardTex(kind, label, color, cost), transparent: true, side: DoubleSide }));
+  face.name = `Card-${kind}`;
+  const glowGeo = new PlaneGeometry(0.048, 0.068); glowGeo.translate(0, 0.03, -0.0005);
+  const glow = new Mesh(glowGeo, new MeshBasicMaterial({ color: 0xfff0a0, transparent: true, opacity: 0, depthWrite: false }));
+  root.add(glow, face);
+  return { root, face, glow };
+}
