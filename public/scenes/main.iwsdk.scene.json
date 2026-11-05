@@ -27,21 +27,21 @@
   "resources": {},
   "nodes": [
     {
-      "id": "objective-panel",
-      "name": "Objective Panel",
+      "id": "hud-panel",
+      "name": "Valley HUD Panel",
       "content": {
         "type": "asset",
-        "asset": "objective-panel"
+        "asset": "hud-panel"
       },
       "transform": {
         "position": [
-          0.6,
-          1.05,
-          -0.62
+          0.62,
+          1.02,
+          -0.6
         ],
         "rotationDeg": [
-          -10,
-          -44,
+          -12,
+          -42,
           0
         ],
         "scale": 0.2
@@ -49,10 +49,10 @@
       "components": {
         "RayInteractable": {},
         "ScreenSpace": {
-          "top": "20px",
-          "left": "20px",
-          "width": "28vw",
-          "height": "40%"
+          "top": "16px",
+          "left": "16px",
+          "width": "30vw",
+          "height": "46%"
         }
       }
     }

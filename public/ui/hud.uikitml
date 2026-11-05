@@ -1,0 +1,120 @@
+<style>
+  .panel-root {
+    flex-direction: column;
+    width: 440px;
+  }
+
+  .panel-content {
+    flex-direction: column;
+    padding-top: 16px;
+    padding-left: 22px;
+    padding-right: 22px;
+    padding-bottom: 6px;
+  }
+
+  .brand {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    color: #c98a3a;
+  }
+
+  .title {
+    margin-top: 6px;
+    font-size: 21px;
+    font-weight: 700;
+    line-height: 1.1;
+    color: #272727;
+  }
+
+  .title:dark {
+    color: rgba(255, 255, 255, 0.95);
+  }
+
+  .body {
+    margin-top: 6px;
+    font-size: 14px;
+    font-weight: 500;
+    line-height: 1.35;
+    width: 100%;
+    color: #333333;
+  }
+
+  .body:dark {
+    color: rgba(255, 255, 255, 0.85);
+  }
+
+  .stats {
+    margin-top: 8px;
+    font-size: 14px;
+    font-weight: 700;
+    color: #2f5f9a;
+  }
+
+  .stats:dark {
+    color: #9fd0ff;
+  }
+
+  .status {
+    margin-top: 6px;
+    font-size: 14px;
+    font-weight: 600;
+    color: #a0501a;
+  }
+
+  .status:dark {
+    color: #ffc070;
+  }
+
+  .row {
+    flex-direction: row;
+    gap: 8px;
+    padding-left: 22px;
+    padding-right: 22px;
+    padding-top: 8px;
+  }
+
+  .last-row {
+    padding-bottom: 18px;
+  }
+</style>
+<Panel class="panel-root">
+  <div class="panel-content">
+    <div class="brand">DUNGEON TABLE - LANTERN VALLEY</div>
+    <div id="quest-title" class="title">CLEAR THE ROAD</div>
+    <div id="quest-body" class="body">
+      Point at the ground and pinch (or click) to walk.
+    </div>
+    <Divider></Divider>
+    <div id="stats-text" class="stats">Lv 1  HP 100/100  Energy 100  XP 0/100  Gold 0</div>
+    <div id="status-text" class="status">Bandits patrol past the bridge. Stay out of their sight cones, or fight.</div>
+  </div>
+  <div class="row">
+    <Button id="card-fire">
+      <ButtonLabel>Fire</ButtonLabel>
+    </Button>
+    <Button id="card-water">
+      <ButtonLabel>Water</ButtonLabel>
+    </Button>
+    <Button id="card-earth">
+      <ButtonLabel>Earth</ButtonLabel>
+    </Button>
+    <Button id="card-air">
+      <ButtonLabel>Air</ButtonLabel>
+    </Button>
+  </div>
+  <div class="row last-row">
+    <Button id="fuse-button" variant="secondary">
+      <ButtonLabel id="fuse-label">Fuse</ButtonLabel>
+    </Button>
+    <Button id="xr-button">
+      <ButtonIcon>
+        <RectangleGoggles></RectangleGoggles>
+      </ButtonIcon>
+      <ButtonLabel>Enter XR</ButtonLabel>
+    </Button>
+    <Button id="restart-button" variant="secondary">
+      <ButtonLabel>Restart</ButtonLabel>
+    </Button>
+  </div>
+</Panel>

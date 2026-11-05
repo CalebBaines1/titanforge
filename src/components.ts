@@ -1,4 +1,4 @@
 import { defineComponents } from '@iwsdk/core';
-import { DriveLever, Part, PartSocket } from './titan-components.js';
+import { Foe, Hero } from './valley-components.js';
 
-export default defineComponents([Part, PartSocket, DriveLever]);
+export default defineComponents([Hero, Foe]);
