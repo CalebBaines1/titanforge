@@ -4,9 +4,9 @@ const publicAssetUrl = (filePath: string): string =>
   `${import.meta.env.BASE_URL}${filePath.replace(/^\/+/u, '')}`;
 
 export default defineAssets({
-  'objective-panel': {
-    url: publicAssetUrl('ui/objective.uikitml'),
+  'hud-panel': {
+    url: publicAssetUrl('ui/hud.uikitml'),
     type: AssetType.UIKitML,
-    name: 'Objective Panel',
+    name: 'Valley HUD Panel',
   },
 });

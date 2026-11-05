@@ -1,42 +1,32 @@
-# TITANFORGE
+# Dungeon Table: Lantern Valley
 
-A mixed-reality engineering expedition for Meta Quest, built with the
-[Immersive Web SDK](https://iwsdk.dev) for the Meta VR Start Developer
-Competition 2026.
+A tabletop RPG for Meta Quest, built as a WebXR app on the Immersive Web SDK (IWSDK).
+A small valley sits on your real table in mixed reality. You walk your hero around it,
+sneak past or fight bandits with fire, water, earth and air cards, and fuse two cards
+into stronger moves.
 
-You are stranded on a strange planet that sits on your real table. Build a
-rover from modular parts with your hands, drive it with two physical levers,
-and invent your way past each obstacle toward the Titan Gate.
+## Play
 
-## Play it
+- `npm install`, then `npm run dev` (the IWSDK CLI starts Vite and a managed browser).
+- On a Quest, open the network URL from `npx @iwsdk/cli dev status` in the browser,
+  accept the local certificate warning, and press **Enter XR**.
+- Point at the ground and pinch to walk (click on desktop). The hero takes the bridge
+  to cross the river.
+- Bandits have sight cones. Walk into one and you are spotted: a battle ring rises
+  where you stand. Or sneak up and play a card first for a 1.5x ambush.
+- Cards: Fire, Water, Earth, Air (keys 1 to 4). Fire beats air, air beats earth,
+  earth beats water, water beats fire (2x, or 0.5x the other way).
+- Fuse (key F), then two different cards: Lava, Storm, Steam (heal), Mud (slows),
+  Blaze, Dust devil.
+- Leave the ring to run away. Get knocked out and you wake up at home.
+- Quest: clear the road, clear the bandit camp, go home.
 
-Open the GitHub Pages URL on a Quest 3 / 3S browser and press **Enter XR**.
-Sit at a table; the diorama appears at tabletop height in front of you.
+## Code
 
-- **Build:** pinch a part on the tray and drop it on a glowing ring on the
-  chassis. Wheels and a motor make it drive. The arm carries the gripper further.
-- **Drive:** pinch the orange (left) and blue (right) levers and push them
-  forward. Push one more than the other to turn. Let go to stop.
-- **Expedition 1:** recover the power cell from the crevice, power the relay,
-  and cross the bridge to the Titan Gate.
+- `src/valley-system.ts` runs the game: walking, patrols and sight, fights, the HUD.
+- `src/valley-meshes.ts` builds the valley, characters and effects in code.
+- `src/valley-components.ts` holds the `Hero` and `Foe` ECS components.
+- `public/ui/hud.uikitml` is the quest and card panel.
 
-Desktop testing: `W`/`S` drive and `A`/`D` turn.
-
-## Develop
-
-```bash
-npm install
-npm run dev        # managed dev server + Quest 3 emulator (IWER)
-npm run typecheck
-npm run build      # static site in dist/
-```
-
-Pushing to `main` deploys to GitHub Pages via `.github/workflows/deploy.yml`.
-
-## Code map
-
-- `src/titan-system.ts` — game loop: snapping, levers, driving, collisions, objectives
-- `src/titan-meshes.ts` — low-poly procedural art
-- `src/titan-components.ts` — ECS components (`Part`, `PartSocket`, `DriveLever`)
-- `public/ui/objective.uikitml` — objective panel
-- `iwsdk.config.json` — XR features (passthrough, hand tracking, pinch-to-grab)
+Not in this first version yet: mounts, first person riding, fishing and other
+minigames, the house interior, character creation, the world boss and realm gates.
